@@ -44,11 +44,13 @@ class Command(MakeMigrationCommand):
         )
 
     def handle(self, *args, **options):
-        self.interactive = options['interactive']
         self.model = options['model']
         self.base_app = options['base_app']
         self.target_app = options['target_app']
         self.app_labels = (self.base_app, self.target_app)
+        self.interactive = options['interactive']
+        self.verbosity = options['verbosity']
+        self.dry_run = False
 
         for app_label in self.app_labels:
             try:
@@ -104,6 +106,7 @@ class Command(MakeMigrationCommand):
             ProjectState.from_apps(apps),
             self.questioner(specified_apps=(self.base_app, )),  # fixme check me
         )
+        autodetector.generated_operations = {}
         autodetector.add_operation(
             self.base_app,
             SeparateDatabaseAndState(
@@ -113,12 +116,12 @@ class Command(MakeMigrationCommand):
                 )
             )
         )
+        autodetector._sort_migrations()
         autodetector._build_migration_list()
 
         changes = autodetector.arrange_for_graph(
-            changes=autodetector.changes,
+            changes=autodetector.migrations,
             graph=loader.graph,
-            migration_name=self.migration_name,
         )
         self.write_migration_files(changes)
         return
