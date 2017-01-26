@@ -14,6 +14,7 @@ from django.db.migrations.questioner import (
     NonInteractiveMigrationQuestioner,
 )
 from django.db.migrations.state import ProjectState
+from django.db.migrations.writer import MigrationWriter
 
 
 class Command(MakeMigrationCommand):
@@ -42,6 +43,10 @@ class Command(MakeMigrationCommand):
             action='store_false', dest='interactive', default=True,
             help='Tells Django to NOT prompt the user for input of any kind.',
         )
+        parser.add_argument(
+            '--dry-run', action='store_true', dest='dry_run', default=False,
+            help="Just show what migrations would be made; don't actually write them.",
+        )
 
     def handle(self, *args, **options):
         self.model = options['model']
@@ -50,7 +55,7 @@ class Command(MakeMigrationCommand):
         self.app_labels = (self.base_app, self.target_app)
         self.interactive = options['interactive']
         self.verbosity = options['verbosity']
-        self.dry_run = False
+        self.dry_run = options['dry_run']
 
         for app_label in self.app_labels:
             try:
@@ -95,8 +100,8 @@ class Command(MakeMigrationCommand):
 
         self.questioner = InteractiveMigrationQuestioner if self.interactive else NonInteractiveMigrationQuestioner
 
-        self.make_first_migrations_for_base_app()
-        # self.make_first_migrations_for_target_app()
+        self.first_migration_name = self.make_first_migrations_for_base_app()
+        self.make_first_migrations_for_target_app()
         # self.resolve_foreign_keys()
 
     def make_first_migrations_for_base_app(self):
@@ -104,7 +109,7 @@ class Command(MakeMigrationCommand):
         autodetector = MigrationAutodetector(
             loader.project_state(),
             ProjectState.from_apps(apps),
-            self.questioner(specified_apps=(self.base_app, )),  # fixme check me
+            self.questioner(specified_apps=(self.base_app, )),
         )
         autodetector.generated_operations = {}
         autodetector.add_operation(
@@ -124,7 +129,7 @@ class Command(MakeMigrationCommand):
             graph=loader.graph,
         )
         self.write_migration_files(changes)
-        return
+        return MigrationWriter(changes[self.base_app][0]).filename
 
     def make_first_migrations_for_target_app(self):
         loader = MigrationLoader(None, ignore_no_migrations=True)
@@ -133,14 +138,26 @@ class Command(MakeMigrationCommand):
             ProjectState.from_apps(apps),
             self.questioner(specified_apps=(self.target_app, )),
         )
-        changes = {
-            self.target_app: [Migration("custom", self.target_app)]
-        }
+        autodetector.generated_operations = {}
+        model_state = autodetector.to_state.models[self.base_app, self.model]
+        autodetector.add_operation(
+            self.target_app,
+            SeparateDatabaseAndState(
+                state_operations=operations.CreateModel(
+                    name=model_state.name,
+                    fields=[d for d in model_state.fields],
+                    options=model_state.options,
+                    bases=model_state.bases,
+                    managers=model_state.managers,
+                )
+            ),
+        )
+        autodetector._sort_migrations()
+        autodetector._build_migration_list()
 
         changes = autodetector.arrange_for_graph(
-            changes=changes,
+            changes=autodetector.migrations,
             graph=loader.graph,
-            migration_name=self.migration_name,
         )
         self.write_migration_files(changes)
         return
