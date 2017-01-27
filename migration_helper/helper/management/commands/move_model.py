@@ -100,11 +100,9 @@ class Command(MakeMigrationCommand):
 
         self.questioner = InteractiveMigrationQuestioner if self.interactive else NonInteractiveMigrationQuestioner
 
-        self.first_migration_name = self.make_first_migrations_for_base_app()
-        self.make_first_migrations_for_target_app()
-        # self.resolve_foreign_keys()
+        # 1
+        # first migration for base_app, manually AlterModelTable + SeperateStateAndDb
 
-    def make_first_migrations_for_base_app(self):
         loader = MigrationLoader(None, ignore_no_migrations=True)
         autodetector = MigrationAutodetector(
             loader.project_state(),
@@ -128,10 +126,13 @@ class Command(MakeMigrationCommand):
             changes=autodetector.migrations,
             graph=loader.graph,
         )
+        first_base_app_migration_name = changes[self.base_app][0].name
         self.write_migration_files(changes)
-        return MigrationWriter(changes[self.base_app][0]).filename
 
-    def make_first_migrations_for_target_app(self):
+        # 2
+        # migrations for target_app, Create model in second App
+        # import pdb
+        # pdb.set_trace()
         loader = MigrationLoader(None, ignore_no_migrations=True)
         autodetector = MigrationAutodetector(
             loader.project_state(),
@@ -139,30 +140,42 @@ class Command(MakeMigrationCommand):
             self.questioner(specified_apps=(self.target_app, )),
         )
         autodetector.generated_operations = {}
-        model_state = autodetector.to_state.models[self.base_app, self.model]
-        autodetector.add_operation(
-            self.target_app,
-            SeparateDatabaseAndState(
-                state_operations=operations.CreateModel(
-                    name=model_state.name,
-                    fields=[d for d in model_state.fields],
-                    options=model_state.options,
-                    bases=model_state.bases,
-                    managers=model_state.managers,
-                )
-            ),
-        )
+
+        # parameters below must be fed to generate_created_models()
+        # they imitate the logic of operations keeping the logic
+
+        autodetector.old_apps = autodetector.from_state.concrete_apps
+        autodetector.new_apps = autodetector.to_state.apps
+        autodetector.old_model_keys = []
+        autodetector.old_proxy_keys = []
+        autodetector.old_unmanaged_keys = []
+        autodetector.new_model_keys = [(self.target_app, self.model)]
+        autodetector.new_proxy_keys = []
+        autodetector.new_unmanaged_keys = []
+
+        autodetector.generate_created_models()
+
         autodetector._sort_migrations()
         autodetector._build_migration_list()
-
+        import pdb
+        pdb.set_trace()
+        created_operations = autodetector.migrations
+        assert len(created_operations) == 1, "Step two went wrong."
+        create_operation = created_operations[self.target_app][0].operations
+        assert len(create_operation) == 1, "Step two went wrong."
+        autodetector.migrations[self.target_app][0].operations \
+            = [SeparateDatabaseAndState(state_operations=create_operation)]
+        autodetector.migrations[self.target_app][0].dependencies.append((self.base_app, first_base_app_migration_name))
         changes = autodetector.arrange_for_graph(
             changes=autodetector.migrations,
             graph=loader.graph,
         )
+
         self.write_migration_files(changes)
         return
+        # 3
+        # Third step, resolving all Relational Fields in other apps
 
-    def resolve_foreign_keys(self):
         all_apps = set(config.label for config in apps.get_app_configs())
         loader = MigrationLoader(None, ignore_no_migrations=True)
         autodetector = MigrationAutodetector(
@@ -175,7 +188,32 @@ class Command(MakeMigrationCommand):
             graph=loader.graph,
             trim_to_apps=all_apps,
             convert_apps=all_apps,
-            migration_name=self.migration_name,
         )
-        assert changes, 'No changes detected!'
+        self.write_migration_files(changes)
+
+        # 4
+        # Fourth step, delete model from state in base_app
+
+        loader = MigrationLoader(None, ignore_no_migrations=True)
+        autodetector = MigrationAutodetector(
+            loader.project_state(),
+            ProjectState.from_apps(apps),
+            self.questioner(specified_apps=(self.base_app,)),
+        )
+        autodetector.generated_operations = {}
+        autodetector.add_operation(
+            self.base_app,
+            SeparateDatabaseAndState(
+                database_operations=operations.DeleteModel(
+                    name=self.model,
+                )
+            )
+        )
+        autodetector._sort_migrations()
+        autodetector._build_migration_list()
+
+        changes = autodetector.arrange_for_graph(
+            changes=autodetector.migrations,
+            graph=loader.graph,
+        )
         self.write_migration_files(changes)
