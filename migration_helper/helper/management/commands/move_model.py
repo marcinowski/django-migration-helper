@@ -172,7 +172,6 @@ class Command(MakeMigrationCommand):
         )
 
         self.write_migration_files(changes)
-        return
         # 3
         # Third step, resolving all Relational Fields in other apps
 
