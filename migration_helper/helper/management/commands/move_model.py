@@ -131,8 +131,7 @@ class Command(MakeMigrationCommand):
 
         # 2
         # migrations for target_app, Create model in second App
-        # import pdb
-        # pdb.set_trace()
+
         loader = MigrationLoader(None, ignore_no_migrations=True)
         autodetector = MigrationAutodetector(
             loader.project_state(),
@@ -163,15 +162,23 @@ class Command(MakeMigrationCommand):
         assert len(created_operations) == 1, "Step two went wrong."
         create_operation = created_operations[self.target_app][0].operations
         assert len(create_operation) == 1, "Step two went wrong."
+
+        # wrap the migration in state_operation
         autodetector.migrations[self.target_app][0].operations \
             = [SeparateDatabaseAndState(state_operations=create_operation)]
+
+        # add the depencency to the migration
         autodetector.migrations[self.target_app][0].dependencies.append((self.base_app, first_base_app_migration_name))
+
         changes = autodetector.arrange_for_graph(
             changes=autodetector.migrations,
             graph=loader.graph,
         )
 
+        first_target_app_migration_name = changes[self.target_app][0].name
+
         self.write_migration_files(changes)
+
         # 3
         # Third step, resolving all Relational Fields in other apps
 
@@ -182,6 +189,16 @@ class Command(MakeMigrationCommand):
             ProjectState.from_apps(apps),
             self.questioner(specified_apps=all_apps),
         )
+
+        autodetector._prepare_field_lists()
+        autodetector.generate_altered_fields()
+
+        for app, migrations in autodetector.migrations.items():
+            for migration in migrations:
+                migration.dependencies.append(
+                    (self.base_app, first_base_app_migration_name),
+                    (self.target_app, first_target_app_migration_name)
+                )
 
         changes = autodetector.changes(
             graph=loader.graph,

@@ -40,7 +40,8 @@ INSTALLED_APPS = [
 
     'helper',
     'base_app',
-    'target_app'
+    'target_app',
+    'foreign_app'
 ]
 
 MIDDLEWARE = [
