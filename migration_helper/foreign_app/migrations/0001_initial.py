@@ -11,7 +11,7 @@ class Migration(migrations.Migration):
     initial = True
 
     dependencies = [
-        ('target_app', '0002_testmodel'),
+        ('target_app', '0001_initial'),
         ('base_app', '0001_initial'),
     ]
 

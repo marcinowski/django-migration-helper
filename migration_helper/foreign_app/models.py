@@ -1,7 +1,7 @@
 from django.db import models
 
-from base_app.models import TestModel
-from target_app.models import SecondTestModel
+# from base_app.models import TestModel
+from target_app.models import SecondTestModel, TestModel
 
 
 class TestFKModel(models.Model):

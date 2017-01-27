@@ -156,8 +156,7 @@ class Command(MakeMigrationCommand):
 
         autodetector._sort_migrations()
         autodetector._build_migration_list()
-        import pdb
-        pdb.set_trace()
+
         created_operations = autodetector.migrations
         assert len(created_operations) == 1, "Step two went wrong."
         create_operation = created_operations[self.target_app][0].operations
@@ -190,8 +189,22 @@ class Command(MakeMigrationCommand):
             self.questioner(specified_apps=all_apps),
         )
 
+        autodetector.generated_operations = {}
+
+        autodetector.old_apps = autodetector.from_state.concrete_apps
+        autodetector.new_apps = autodetector.to_state.apps
+        autodetector.old_model_keys = []
+        autodetector.old_proxy_keys = []
+        autodetector.old_unmanaged_keys = []
+        autodetector.new_model_keys = []
+        autodetector.new_proxy_keys = []
+        autodetector.new_unmanaged_keys = []
+
         autodetector._prepare_field_lists()
         autodetector.generate_altered_fields()
+
+        autodetector._sort_migrations()
+        autodetector._build_migration_list()
 
         for app, migrations in autodetector.migrations.items():
             for migration in migrations:
@@ -200,10 +213,9 @@ class Command(MakeMigrationCommand):
                     (self.target_app, first_target_app_migration_name)
                 )
 
-        changes = autodetector.changes(
+        changes = autodetector.arrange_for_graph(
             graph=loader.graph,
-            trim_to_apps=all_apps,
-            convert_apps=all_apps,
+            changes=autodetector.migrations,
         )
         self.write_migration_files(changes)
 
