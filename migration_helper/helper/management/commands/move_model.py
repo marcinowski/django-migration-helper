@@ -1,7 +1,6 @@
 import sys
 
 from django.apps import apps
-from django.conf import settings
 from django.core.management.base import CommandError
 from django.core.management.commands.makemigrations import Command as MakeMigrationCommand
 from django.core.management.commands.migrate import Command as MigrateCommand
@@ -14,6 +13,19 @@ from django.db.migrations.state import ProjectState
 
 
 class Command(MakeMigrationCommand):
+    """
+    Command for moving model with existing data attached in database from one app to another.
+    http://stackoverflow.com/questions/30601107/move-models-between-django-1-8-apps-with-required-foreignkey-references
+
+    :param model: model name
+    :param base_app: app where the model was located before moving
+    :param target_app: app where the model will be located after moving
+
+    :param --migrate: if passed migrations will be applied immediately after seting migration files
+    :param --dry-run: if passed no migration files will be written, just show the operations
+    :param --database: database alias to perform operation on, unless different than default
+    """
+
     help = "Creates migrations for moving model from base_app to target_app"
 
     def add_arguments(self, parser):
@@ -51,14 +63,15 @@ class Command(MakeMigrationCommand):
         self.model = options['model']
         self.base_app = options['base_app']
         self.target_app = options['target_app']
+
         self.migrate = options['migrate']
         self.database = options['database']
+
         self.interactive = options['interactive']
         self.verbosity = options['verbosity']
         self.dry_run = options['dry_run']
-        self.app_labels = (self.base_app, self.target_app)
 
-        for app_label in self.app_labels:
+        for app_label in (self.base_app, self.target_app):
             try:
                 apps.get_app_config(app_label)
             except LookupError:
@@ -66,25 +79,20 @@ class Command(MakeMigrationCommand):
                 sys.exit(2)
 
         connection = connections[self.database]
-        connection.prepare_database()
 
-        # Load the current graph state. Pass in None for the connection so
-        # the loader doesn't try to resolve replaced migrations from DB.
+        # Load the current graph state.
         loader = MigrationLoader(None, ignore_no_migrations=True)
 
         # Raise an error if any migrations are applied before their dependencies.
-        consistency_check_labels = set(config.label for config in apps.get_app_configs())
-        # Non-default databases are only checked if database routers used.
-        aliases_to_check = connections if settings.DATABASE_ROUTERS else [DEFAULT_DB_ALIAS]
-        for alias in sorted(aliases_to_check):
-            connection = connections[alias]
-            if (connection.settings_dict['ENGINE'] != 'django.db.backends.dummy' and any(
-                    # At least one model must be migrated to the database.
-                    router.allow_migrate(connection.alias, app_label, model_name=model._meta.object_name)
-                    for app_label in consistency_check_labels
-                    for model in apps.get_app_config(app_label).get_models()
-            )):
-                loader.check_consistent_history(connection)
+        app_labels = set(config.label for config in apps.get_app_configs())
+
+        if (connection.settings_dict['ENGINE'] != 'django.db.backends.dummy' and any(
+                # At least one model must be migrated to the database.
+                router.allow_migrate(connection.alias, app_label, model_name=model._meta.object_name)
+                for app_label in app_labels
+                for model in apps.get_app_config(app_label).get_models()
+        )):
+            loader.check_consistent_history(connection)
 
         conflicts = loader.detect_conflicts()
 
@@ -139,11 +147,10 @@ class Command(MakeMigrationCommand):
             ProjectState.from_apps(apps),
             self.questioner(specified_apps=(self.target_app, )),
         )
-        autodetector.generated_operations = {}
 
         # parameters below must be fed to generate_created_models()
         # they imitate the logic of operations keeping the logic
-
+        autodetector.generated_operations = {}
         autodetector.old_apps = autodetector.from_state.concrete_apps
         autodetector.new_apps = autodetector.to_state.apps
         autodetector.old_model_keys = []
@@ -160,6 +167,7 @@ class Command(MakeMigrationCommand):
 
         created_operations = autodetector.migrations
         assert len(created_operations) == 1, "Step two went wrong."
+
         create_operation = created_operations[self.target_app][0].operations
         assert len(create_operation) == 1, "Step two went wrong."
 
@@ -182,12 +190,11 @@ class Command(MakeMigrationCommand):
         # 3
         # Third step, resolving all Relational Fields in other apps
 
-        all_apps = set(config.label for config in apps.get_app_configs())
         loader = MigrationLoader(None, ignore_no_migrations=True)
         autodetector = MigrationAutodetector(
             loader.project_state(),
             ProjectState.from_apps(apps),
-            self.questioner(specified_apps=all_apps),
+            self.questioner(specified_apps=app_labels),
         )
 
         autodetector.generated_operations = {}
