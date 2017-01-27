@@ -200,7 +200,33 @@ class Command(MakeMigrationCommand):
         autodetector.new_proxy_keys = []
         autodetector.new_unmanaged_keys = []
 
+        for al, mn in sorted(autodetector.from_state.models.keys()):
+            model = autodetector.old_apps.get_model(al, mn)
+            if not model._meta.managed:
+                autodetector.old_unmanaged_keys.append((al, mn))
+            elif al not in autodetector.from_state.real_apps:
+                if model._meta.proxy:
+                    autodetector.old_proxy_keys.append((al, mn))
+                else:
+                    autodetector.old_model_keys.append((al, mn))
+
+        for al, mn in sorted(autodetector.to_state.models.keys()):
+            model = autodetector.new_apps.get_model(al, mn)
+            if not model._meta.managed:
+                autodetector.new_unmanaged_keys.append((al, mn))
+            elif (
+                al not in autodetector.from_state.real_apps or
+                (None and al in None)
+            ):
+                if model._meta.proxy:
+                    autodetector.new_proxy_keys.append((al, mn))
+                else:
+                    autodetector.new_model_keys.append((al, mn))
+        autodetector.renamed_models = {}
+        autodetector.renamed_fields = {}
         autodetector._prepare_field_lists()
+        autodetector._generate_through_model_map()
+
         autodetector.generate_altered_fields()
 
         autodetector._sort_migrations()
@@ -208,10 +234,10 @@ class Command(MakeMigrationCommand):
 
         for app, migrations in autodetector.migrations.items():
             for migration in migrations:
-                migration.dependencies.append(
+                migration.dependencies.extend((
                     (self.base_app, first_base_app_migration_name),
                     (self.target_app, first_target_app_migration_name)
-                )
+                ))
 
         changes = autodetector.arrange_for_graph(
             graph=loader.graph,
@@ -232,7 +258,7 @@ class Command(MakeMigrationCommand):
         autodetector.add_operation(
             self.base_app,
             SeparateDatabaseAndState(
-                database_operations=operations.DeleteModel(
+                state_operations=operations.DeleteModel(
                     name=self.model,
                 )
             )
