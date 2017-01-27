@@ -4,17 +4,13 @@ from django.apps import apps
 from django.conf import settings
 from django.core.management.base import CommandError
 from django.core.management.commands.makemigrations import Command as MakeMigrationCommand
+from django.core.management.commands.migrate import Command as MigrateCommand
 from django.db import connections, DEFAULT_DB_ALIAS, router
-from django.db.migrations import Migration
 from django.db.migrations.autodetector import MigrationAutodetector
 from django.db.migrations.loader import MigrationLoader
 from django.db.migrations import operations, SeparateDatabaseAndState
-from django.db.migrations.questioner import (
-    InteractiveMigrationQuestioner, MigrationQuestioner,
-    NonInteractiveMigrationQuestioner,
-)
+from django.db.migrations.questioner import InteractiveMigrationQuestioner, NonInteractiveMigrationQuestioner
 from django.db.migrations.state import ProjectState
-from django.db.migrations.writer import MigrationWriter
 
 
 class Command(MakeMigrationCommand):
@@ -34,8 +30,11 @@ class Command(MakeMigrationCommand):
             help='App label to put the model into',
         )
         parser.add_argument(
-            '--database', action='store', dest='database',
-            default=DEFAULT_DB_ALIAS,
+            '--migrate', action='store_true', dest='migrate', default=False,
+            help='Tells Django to run migrations immediately after the migration files are set.',
+        )
+        parser.add_argument(
+            '--database', action='store', dest='database', default=DEFAULT_DB_ALIAS,
             help='Nominates a database to synchronize. Defaults to the "default" database.',
         )
         parser.add_argument(
@@ -52,10 +51,12 @@ class Command(MakeMigrationCommand):
         self.model = options['model']
         self.base_app = options['base_app']
         self.target_app = options['target_app']
-        self.app_labels = (self.base_app, self.target_app)
+        self.migrate = options['migrate']
+        self.database = options['database']
         self.interactive = options['interactive']
         self.verbosity = options['verbosity']
         self.dry_run = options['dry_run']
+        self.app_labels = (self.base_app, self.target_app)
 
         for app_label in self.app_labels:
             try:
@@ -63,8 +64,8 @@ class Command(MakeMigrationCommand):
             except LookupError:
                 self.stderr.write("App '%s' could not be found. Is it in INSTALLED_APPS?" % app_label)
                 sys.exit(2)
-        db = options['database']
-        connection = connections[db]
+
+        connection = connections[self.database]
         connection.prepare_database()
 
         # Load the current graph state. Pass in None for the connection so
@@ -113,10 +114,10 @@ class Command(MakeMigrationCommand):
         autodetector.add_operation(
             self.base_app,
             SeparateDatabaseAndState(
-                database_operations=operations.AlterModelTable(
+                database_operations=[operations.AlterModelTable(
                     name=self.model,
                     table=self.target_app + '_' + self.model
-                )
+                )]
             )
         )
         autodetector._sort_migrations()
@@ -222,6 +223,7 @@ class Command(MakeMigrationCommand):
                     autodetector.new_proxy_keys.append((al, mn))
                 else:
                     autodetector.new_model_keys.append((al, mn))
+
         autodetector.renamed_models = {}
         autodetector.renamed_fields = {}
         autodetector._prepare_field_lists()
@@ -243,6 +245,13 @@ class Command(MakeMigrationCommand):
             graph=loader.graph,
             changes=autodetector.migrations,
         )
+
+        third_step_migrations = []
+
+        for app, migrations in changes.items():
+            for migration in migrations:
+                third_step_migrations.append((app, migration.name))
+
         self.write_migration_files(changes)
 
         # 4
@@ -258,16 +267,31 @@ class Command(MakeMigrationCommand):
         autodetector.add_operation(
             self.base_app,
             SeparateDatabaseAndState(
-                state_operations=operations.DeleteModel(
+                state_operations=[operations.DeleteModel(
                     name=self.model,
-                )
+                )]
             )
         )
         autodetector._sort_migrations()
         autodetector._build_migration_list()
 
+        autodetector.migrations[self.base_app][0].dependencies.extend(third_step_migrations)
+
         changes = autodetector.arrange_for_graph(
             changes=autodetector.migrations,
             graph=loader.graph,
         )
+
         self.write_migration_files(changes)
+
+        if self.migrate:
+            MigrateCommand().handle(
+                app_label='',
+                migration_name='',
+                verbosity=self.verbosity,
+                interactive=self.interactive,
+                database=self.database,
+                fake=False,
+                fake_initial=False,
+                run_syncdb=False
+            )
