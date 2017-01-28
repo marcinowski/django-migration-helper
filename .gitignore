@@ -95,4 +95,3 @@ ENV/
 *.sqlite3
 
 # dist package
-django-migration-helper/
