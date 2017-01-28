@@ -38,7 +38,7 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
 
-    'helper',
+    'migration_helper',
     'base_app',
     'target_app',
     'foreign_app'
