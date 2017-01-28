@@ -89,3 +89,4 @@ ENV/
 .ropeproject
 .idea/
 *.sqlite3
+django-migration-helper/
