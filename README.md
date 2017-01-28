@@ -29,6 +29,7 @@ As a next step you run this command:
 ```
     python manage.py move_model <model_label> <base_app> <target_app> [**options]
 ```
+
 This command creates migration files for an operation of moving a model (given by `<model_label>`)
 from `<base_app>` to `<target_app> `keeping the data already stored
 in database intact and resolving all relative fields using
