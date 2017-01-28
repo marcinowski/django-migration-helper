@@ -87,6 +87,12 @@ ENV/
 
 # Rope project settings
 .ropeproject
+
+# PyCharm files
 .idea/
+
+# Database local
 *.sqlite3
+
+# dist package
 django-migration-helper/

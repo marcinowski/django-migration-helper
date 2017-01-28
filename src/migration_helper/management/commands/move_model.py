@@ -112,6 +112,7 @@ class Command(MakeMigrationCommand):
         # 1
         # first migration for base_app, manually AlterModelTable + SeperateStateAndDb
 
+        # Reload the current graph state.
         loader = MigrationLoader(None, ignore_no_migrations=True)
         autodetector = MigrationAutodetector(
             loader.project_state(),
