@@ -9,7 +9,6 @@ perform some structural changes in your code while keeping the data in your data
 1. Run 
 ```
   pip install django-migration-helper
-  
 ```
 
 2. Add "migration_helper" to your INSTALLED_APPS setting like this::
