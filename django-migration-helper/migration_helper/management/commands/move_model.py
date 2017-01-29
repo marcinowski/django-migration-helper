@@ -6,6 +6,7 @@ from django.core.management.commands.makemigrations import Command as MakeMigrat
 from django.core.management.commands.migrate import Command as MigrateCommand
 from django.db import connections, DEFAULT_DB_ALIAS, router
 from django.db.migrations.autodetector import MigrationAutodetector
+from django.db.migrations.executor import MigrationExecutor
 from django.db.migrations.loader import MigrationLoader
 from django.db.migrations import operations, SeparateDatabaseAndState
 from django.db.migrations.questioner import InteractiveMigrationQuestioner, NonInteractiveMigrationQuestioner
@@ -80,12 +81,19 @@ class Command(MakeMigrationCommand):
 
         connection = connections[self.database]
 
+        # check if all previous migrations are applied
+        executor = MigrationExecutor(connection)
+        plan = executor.migration_plan(executor.loader.graph.leaf_nodes())
+        if plan:
+            raise CommandError('You have unapplied migrations! \nPlease apply them with "python manage.py migrate"'
+                               ' before running "move_model".')
+
         # Load the current graph state.
         loader = MigrationLoader(None, ignore_no_migrations=True)
 
-        # Raise an error if any migrations are applied before their dependencies.
         app_labels = set(config.label for config in apps.get_app_configs())
 
+        # Raise an error if any migrations are applied before their dependencies.
         if (connection.settings_dict['ENGINE'] != 'django.db.backends.dummy' and any(
                 # At least one model must be migrated to the database.
                 router.allow_migrate(connection.alias, app_label, model_name=model._meta.object_name)
