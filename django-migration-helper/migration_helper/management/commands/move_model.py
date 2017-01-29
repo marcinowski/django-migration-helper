@@ -81,10 +81,7 @@ class Command(MakeMigrationCommand):
 
         self._check_db_state()
 
-        # 1
-        # First migration for base_app, manually AlterModelTable + SeparateDatabaseAndState
-
-        # Reload the current graph state.
+        # [1] First migration for base_app, manually AlterModelTable + SeparateDatabaseAndState
         loader = self._get_loader()
         autodetector = self._get_autodetector(specified_apps=(self.base_app, ))
 
@@ -114,9 +111,7 @@ class Command(MakeMigrationCommand):
         # generate first migration file
         self.write_migration_files(changes)
 
-        # 2
-        # migrations for target_app, create model
-
+        # [2] Migrations for target_app, create model
         loader = self._get_loader()
         autodetector = self._get_autodetector(specified_apps=(self.target_app, ))
 
@@ -124,13 +119,10 @@ class Command(MakeMigrationCommand):
         autodetector.new_model_keys = [(self.target_app, self.model)]
 
         autodetector.generate_created_models()
-
-        autodetector._sort_migrations()
         autodetector._build_migration_list()
 
         created_operations = autodetector.migrations
         assert len(created_operations) == 1, "Step two went wrong."
-
         create_operation = created_operations[self.target_app][0].operations
         assert len(create_operation) == 1, "Step two went wrong."
 
@@ -138,7 +130,7 @@ class Command(MakeMigrationCommand):
         autodetector.migrations[self.target_app][0].operations \
             = [SeparateDatabaseAndState(state_operations=create_operation)]
 
-        # add the depencency to the migration
+        # add the dependency to the migration
         autodetector.migrations[self.target_app][0].dependencies.append((self.base_app, first_base_app_migration_name))
 
         changes = autodetector.arrange_for_graph(
@@ -150,8 +142,7 @@ class Command(MakeMigrationCommand):
 
         self.write_migration_files(changes)
 
-        # 3
-        # Third step, resolving all Relational Fields in other apps
+        # [3] Resolving all Relational Fields in other apps
 
         loader = self._get_loader()
         autodetector = self._get_autodetector(specified_apps=self.app_labels)
@@ -184,22 +175,18 @@ class Command(MakeMigrationCommand):
 
         self.write_migration_files(changes)
 
-        # 4
-        # Fourth step, delete model from state in base_app
+        # [4] Delete model from state in base_app
 
         loader = self._get_loader()
         autodetector = self._get_autodetector(specified_apps=(self.base_app,))
-        autodetector.add_operation(
-            self.base_app,
-            SeparateDatabaseAndState(
-                state_operations=[operations.DeleteModel(
-                    name=self.model,
-                )]
-            )
-        )
 
-        autodetector._sort_migrations()
+        autodetector.generate_deleted_models()
         autodetector._build_migration_list()
+
+        create_operation = autodetector.migrations[self.base_app][0].operations
+
+        autodetector.migrations[self.base_app][0].operations \
+            = [SeparateDatabaseAndState(state_operations=create_operation)]
 
         autodetector.migrations[self.base_app][0].dependencies.extend(third_step_migrations)
 
@@ -210,6 +197,7 @@ class Command(MakeMigrationCommand):
 
         self.write_migration_files(changes)
 
+        # [5] If user passed --migrate flag, apply migrations.
         if self.migrate:
             MigrateCommand().handle(
                 app_label='',
@@ -253,6 +241,7 @@ class Command(MakeMigrationCommand):
         return MigrationLoader(None, ignore_no_migrations=True)
 
     def _get_autodetector(self, specified_apps):
+        # Reload the current graph state.
         loader = self._get_loader()
         autodetector = MigrationAutodetector(
             loader.project_state(),
@@ -272,10 +261,7 @@ class Command(MakeMigrationCommand):
         autodetector.new_unmanaged_keys = []
         autodetector.renamed_models = {}
         autodetector.renamed_fields = {}
-        autodetector.old_field_keys = set()
-        autodetector.new_field_keys = set()
-        autodetector.kept_proxy_keys = set()
-        autodetector.kept_unmanaged_keys = set()
+        autodetector.through_users = {}
 
         for al, mn in sorted(autodetector.from_state.models.keys()):
             model = autodetector.old_apps.get_model(al, mn)
