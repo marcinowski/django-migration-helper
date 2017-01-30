@@ -1,7 +1,7 @@
 import sys
 
 from django.apps import apps
-from django.core.management.base import CommandError
+from django.core.management.base import BaseCommand, CommandError
 from django.core.management.commands.makemigrations import Command as MakeMigrationCommand
 from django.core.management.commands.migrate import Command as MigrateCommand
 from django.db import connections, DEFAULT_DB_ALIAS, router
@@ -13,7 +13,7 @@ from django.db.migrations.questioner import InteractiveMigrationQuestioner, NonI
 from django.db.migrations.state import ProjectState
 
 
-class Command(MakeMigrationCommand):
+class Command(BaseCommand):
     """
     Command for moving model with existing data attached in database from one app to another.
     http://stackoverflow.com/questions/30601107/move-models-between-django-1-8-apps-with-required-foreignkey-references
@@ -43,10 +43,6 @@ class Command(MakeMigrationCommand):
             help='App label to put the model into',
         )
         parser.add_argument(
-            '--migrate', action='store_true', dest='migrate', default=False,
-            help='Tells Django to run migrations immediately after the migration files are set.',
-        )
-        parser.add_argument(
             '--database', action='store', dest='database', default=DEFAULT_DB_ALIAS,
             help='Nominates a database to synchronize. Defaults to the "default" database.',
         )
@@ -55,9 +51,14 @@ class Command(MakeMigrationCommand):
             action='store_false', dest='interactive', default=True,
             help='Tells Django to NOT prompt the user for input of any kind.',
         )
-        parser.add_argument(
+        group = parser.add_mutually_exclusive_group()
+        group.add_argument(
             '--dry-run', action='store_true', dest='dry_run', default=False,
             help="Just show what migrations would be made; don't actually write them.",
+        )
+        group.add_argument(
+            '--migrate', action='store_true', dest='migrate', default=False,
+            help='Tells Django to run migrations immediately after the migration files are set.',
         )
 
     def handle(self, *args, **options):
@@ -78,15 +79,14 @@ class Command(MakeMigrationCommand):
         # predefining couple of things
         self.app_labels = set(config.label for config in apps.get_app_configs())
         self.questioner = InteractiveMigrationQuestioner if self.interactive else NonInteractiveMigrationQuestioner
+        self.writer = self._get_writer()
 
         self._check_db_state()
 
         # [1] First migration for base_app, manually AlterModelTable + SeparateDatabaseAndState
-        loader = self._get_loader()
         autodetector = self._get_autodetector(specified_apps=(self.base_app, ))
-
-        # this has to be done manually, autodetector.generate_altered_db_table doesn't work
         autodetector.add_operation(
+            # this has to be done manually, autodetector.generate_altered_db_table doesn't work
             self.base_app,
             SeparateDatabaseAndState(
                 database_operations=[operations.AlterModelTable(
@@ -95,107 +95,60 @@ class Command(MakeMigrationCommand):
                 )]
             )
         )
-
-        # accessing private methods, ugly but saves a lot of code
-        autodetector._build_migration_list()
-
-        changes = autodetector.arrange_for_graph(
-            changes=autodetector.migrations,
-            graph=loader.graph,
-        )
-
-        first_migration = changes[self.base_app]
-        assert len(first_migration) == 1, 'Step one went wrong.'
-        first_base_app_migration_name = first_migration[0].name
-
-        # generate first migration file
-        self.write_migration_files(changes)
+        autodetector._build_migration_list()  # accessing private methods, ugly but saves a lot of code
+        changes = autodetector.arrange_for_graph(changes=autodetector.migrations, graph=self.loader.graph)
+        first_base_app_migration_name = changes[self.base_app][0].name  # save migration name for later dependencies
+        self._write_migration_files(changes)
 
         # [2] Migrations for target_app, create model
-        loader = self._get_loader()
         autodetector = self._get_autodetector(specified_apps=(self.target_app, ))
-
-        # overwrite it just for target_app
-        autodetector.new_model_keys = [(self.target_app, self.model)]
+        autodetector.new_model_keys = [(self.target_app, self.model)]  # overwrite it just for target_app
 
         autodetector.generate_created_models()
         autodetector._build_migration_list()
 
-        created_operations = autodetector.migrations
-        assert len(created_operations) == 1, "Step two went wrong."
-        create_operation = created_operations[self.target_app][0].operations
+        create_operation = autodetector.migrations[self.target_app][0].operations
         assert len(create_operation) == 1, "Step two went wrong."
-
-        # wrap the migration in state_operation
         autodetector.migrations[self.target_app][0].operations \
             = [SeparateDatabaseAndState(state_operations=create_operation)]
 
-        # add the dependency to the migration
         autodetector.migrations[self.target_app][0].dependencies.append((self.base_app, first_base_app_migration_name))
-
-        changes = autodetector.arrange_for_graph(
-            changes=autodetector.migrations,
-            graph=loader.graph,
-        )
-
-        first_target_app_migration_name = changes[self.target_app][0].name
-
-        self.write_migration_files(changes)
+        changes = autodetector.arrange_for_graph(changes=autodetector.migrations, graph=self.loader.graph)
+        first_target_app_migration_name = changes[self.target_app][0].name  # save migration name for later dependencies
+        self._write_migration_files(changes)
 
         # [3] Resolving all Relational Fields in other apps
-
-        loader = self._get_loader()
         autodetector = self._get_autodetector(specified_apps=self.app_labels)
 
         autodetector._prepare_field_lists()
         autodetector._generate_through_model_map()
-
-        autodetector.generate_altered_fields()
-
+        autodetector.generate_altered_fields()  # this performs regular operation, since we only want altered relations
         autodetector._sort_migrations()
         autodetector._build_migration_list()
 
-        for app, migrations in autodetector.migrations.items():
+        for app, migrations in autodetector.migrations.items():  # fill dependencies
             for migration in migrations:
                 migration.dependencies.extend((
                     (self.base_app, first_base_app_migration_name),
                     (self.target_app, first_target_app_migration_name)
                 ))
 
-        changes = autodetector.arrange_for_graph(
-            graph=loader.graph,
-            changes=autodetector.migrations,
-        )
-
-        third_step_migrations = []
-
-        for app, migrations in changes.items():
-            for migration in migrations:
-                third_step_migrations.append((app, migration.name))
-
-        self.write_migration_files(changes)
+        changes = autodetector.arrange_for_graph(graph=self.loader.graph, changes=autodetector.migrations)
+        third_step_migrations = [(app, mig.name) for app, migrations in changes.items() for mig in migrations]
+        self._write_migration_files(changes)
 
         # [4] Delete model from state in base_app
-
-        loader = self._get_loader()
         autodetector = self._get_autodetector(specified_apps=(self.base_app,))
-
         autodetector.generate_deleted_models()
         autodetector._build_migration_list()
 
         create_operation = autodetector.migrations[self.base_app][0].operations
-
         autodetector.migrations[self.base_app][0].operations \
             = [SeparateDatabaseAndState(state_operations=create_operation)]
-
         autodetector.migrations[self.base_app][0].dependencies.extend(third_step_migrations)
 
-        changes = autodetector.arrange_for_graph(
-            changes=autodetector.migrations,
-            graph=loader.graph,
-        )
-
-        self.write_migration_files(changes)
+        changes = autodetector.arrange_for_graph(changes=autodetector.migrations, graph=self.loader.graph)
+        self._write_migration_files(changes)
 
         # [5] If user passed --migrate flag, apply migrations.
         if self.migrate:
@@ -209,6 +162,93 @@ class Command(MakeMigrationCommand):
                 fake_initial=False,
                 run_syncdb=False
             )
+
+    def _check_db_state(self):
+        # check if all previous migrations are applied
+        connection = connections[self.database]
+        executor = MigrationExecutor(connection)
+        plan = executor.migration_plan(executor.loader.graph.leaf_nodes())
+        if plan:
+            raise CommandError('You have unapplied migrations! \nPlease apply them with "python manage.py migrate"'
+                               ' before running "move_model".')
+        # Load the current graph state.
+        self.loader = self._get_loader()
+        # Raise an error if any migrations are applied before their dependencies.
+        if (connection.settings_dict['ENGINE'] != 'django.db.backends.dummy' and any(
+                # At least one model must be migrated to the database.
+                router.allow_migrate(connection.alias, app_label, model_name=model._meta.object_name)
+                for app_label in self.app_labels
+                for model in apps.get_app_config(app_label).get_models()
+        )):
+            self.loader.check_consistent_history(connection)
+
+        conflicts = self.loader.detect_conflicts()
+        if conflicts:
+            name_str = "; ".join(
+                "%s in %s" % (", ".join(names), app)
+                for app, names in conflicts.items()
+            )
+            raise CommandError(
+                "Conflicting migrations detected; multiple leaf nodes in the "
+                "migration graph: (%s).\nTo fix them run "
+                "'python manage.py makemigrations --merge'" % name_str
+            )
+
+    def _get_autodetector(self, specified_apps):
+        self.loader = self._get_loader()  # Reload the current graph state.
+        autodetector = MigrationAutodetector(
+            self.loader.project_state(),
+            ProjectState.from_apps(apps),
+            self.questioner(specified_apps=specified_apps),
+        )
+        # parameters below must be instantiated generating changes
+        # they imitate the content of operations keeping the logic
+        autodetector.generated_operations = {}
+        autodetector.old_apps = autodetector.from_state.concrete_apps
+        autodetector.new_apps = autodetector.to_state.apps
+        autodetector.old_model_keys = []
+        autodetector.old_proxy_keys = []
+        autodetector.old_unmanaged_keys = []
+        autodetector.new_model_keys = []
+        autodetector.new_proxy_keys = []
+        autodetector.new_unmanaged_keys = []
+        autodetector.renamed_models = {}  # this is for step 3, altered fields
+        autodetector.renamed_fields = {}  # this is for step 3, altered fields
+        autodetector.through_users = {}  # this is for step 4, delete models
+
+        # these two loops are from autodetector._detect_changes
+        for al, mn in sorted(autodetector.from_state.models.keys()):
+            model = autodetector.old_apps.get_model(al, mn)
+            if not model._meta.managed:
+                autodetector.old_unmanaged_keys.append((al, mn))
+            elif al not in autodetector.from_state.real_apps:
+                if model._meta.proxy:
+                    autodetector.old_proxy_keys.append((al, mn))
+                else:
+                    autodetector.old_model_keys.append((al, mn))
+        for al, mn in sorted(autodetector.to_state.models.keys()):
+            model = autodetector.new_apps.get_model(al, mn)
+            if not model._meta.managed:
+                autodetector.new_unmanaged_keys.append((al, mn))
+            elif (
+                al not in autodetector.from_state.real_apps or
+                (None and al in None)
+            ):
+                if model._meta.proxy:
+                    autodetector.new_proxy_keys.append((al, mn))
+                else:
+                    autodetector.new_model_keys.append((al, mn))
+        return autodetector
+
+    @staticmethod
+    def _get_loader():
+        return MigrationLoader(None, ignore_no_migrations=True)
+
+    def _get_writer(self):
+        writer = MakeMigrationCommand()
+        writer.verbosity = self.verbosity
+        writer.dry_run = self.dry_run
+        return writer
 
     def _verify_input(self):
         # check if provided apps exist
@@ -236,88 +276,5 @@ class Command(MakeMigrationCommand):
             self.stderr.write(msg)
             sys.exit(2)
 
-    @staticmethod
-    def _get_loader():
-        return MigrationLoader(None, ignore_no_migrations=True)
-
-    def _get_autodetector(self, specified_apps):
-        # Reload the current graph state.
-        loader = self._get_loader()
-        autodetector = MigrationAutodetector(
-            loader.project_state(),
-            ProjectState.from_apps(apps),
-            self.questioner(specified_apps=specified_apps),
-        )
-        # parameters below must be instantiated generating changes
-        # they imitate the logic of operations keeping the logic
-        autodetector.generated_operations = {}
-        autodetector.old_apps = autodetector.from_state.concrete_apps
-        autodetector.new_apps = autodetector.to_state.apps
-        autodetector.old_model_keys = []
-        autodetector.old_proxy_keys = []
-        autodetector.old_unmanaged_keys = []
-        autodetector.new_model_keys = []
-        autodetector.new_proxy_keys = []
-        autodetector.new_unmanaged_keys = []
-        autodetector.renamed_models = {}
-        autodetector.renamed_fields = {}
-        autodetector.through_users = {}
-
-        for al, mn in sorted(autodetector.from_state.models.keys()):
-            model = autodetector.old_apps.get_model(al, mn)
-            if not model._meta.managed:
-                autodetector.old_unmanaged_keys.append((al, mn))
-            elif al not in autodetector.from_state.real_apps:
-                if model._meta.proxy:
-                    autodetector.old_proxy_keys.append((al, mn))
-                else:
-                    autodetector.old_model_keys.append((al, mn))
-
-        for al, mn in sorted(autodetector.to_state.models.keys()):
-            model = autodetector.new_apps.get_model(al, mn)
-            if not model._meta.managed:
-                autodetector.new_unmanaged_keys.append((al, mn))
-            elif (
-                al not in autodetector.from_state.real_apps or
-                (None and al in None)
-            ):
-                if model._meta.proxy:
-                    autodetector.new_proxy_keys.append((al, mn))
-                else:
-                    autodetector.new_model_keys.append((al, mn))
-
-        return autodetector
-
-    def _check_db_state(self):
-        # check if all previous migrations are applied
-        connection = connections[self.database]
-        executor = MigrationExecutor(connection)
-        plan = executor.migration_plan(executor.loader.graph.leaf_nodes())
-        if plan:
-            raise CommandError('You have unapplied migrations! \nPlease apply them with "python manage.py migrate"'
-                               ' before running "move_model".')
-
-        # Load the current graph state.
-        loader = self._get_loader()
-
-        # Raise an error if any migrations are applied before their dependencies.
-        if (connection.settings_dict['ENGINE'] != 'django.db.backends.dummy' and any(
-                # At least one model must be migrated to the database.
-                router.allow_migrate(connection.alias, app_label, model_name=model._meta.object_name)
-                for app_label in self.app_labels
-                for model in apps.get_app_config(app_label).get_models()
-        )):
-            loader.check_consistent_history(connection)
-
-        conflicts = loader.detect_conflicts()
-
-        if conflicts:
-            name_str = "; ".join(
-                "%s in %s" % (", ".join(names), app)
-                for app, names in conflicts.items()
-            )
-            raise CommandError(
-                "Conflicting migrations detected; multiple leaf nodes in the "
-                "migration graph: (%s).\nTo fix them run "
-                "'python manage.py makemigrations --merge'" % name_str
-            )
+    def _write_migration_files(self, changes):
+        self.writer.write_migration_files(changes)
