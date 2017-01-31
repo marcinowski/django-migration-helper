@@ -10,7 +10,7 @@ from django.db.migrations.recorder import MigrationRecorder
 
 class Command(BaseCommand):
     """
-
+    http://stackoverflow.com/questions/8408046/how-to-change-the-name-of-a-django-app
     """
 
     help = "Renames <base_app> to <target_app> keeping all the data and taking care of all previous migrations."
