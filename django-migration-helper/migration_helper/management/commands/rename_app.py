@@ -44,11 +44,13 @@ class Command(BaseCommand):
 
         connection = connections[self.database]
 
+        self.stdout.write(self.style.NOTICE("  Renaming {} to {}.".format(self.base_app, self.target_app))
+                          ) if self.verbosity else None
         # [0] Perform some checks about apps_labels, apps state, db state and migrations
         # self._verify_input()
 
         # [1] Edit django_content_type table, alter <base_app> to <target_app> (also in model) ContentType
-        print("Step 1")
+        self.stdout.write(self.style.NOTICE("  Renaming content types.")) if self.verbosity else None
         for ctype in ContentType.objects.all():
             if ctype.app_label == self.base_app:
                 ctype.app_label = self.target_app
@@ -57,8 +59,8 @@ class Command(BaseCommand):
                     ctype.model = ctype.model[:-len(self.base_app)] + self.target_app
                 ctype.save()
 
-        # [2] Rename model tables under <base_app> BaseDatabaseSchemaEditor ??
-        print("Step 2")
+        # [2] Rename model tables under <base_app> BaseDatabaseSchemaEditor
+        self.stdout.write(self.style.NOTICE("  Renaming database tables.")) if self.verbosity else None
         with connection.schema_editor(atomic=True) as schema_editor:
             for model, state in apps.get_app_config(self.target_app).models.items():
                 default_old_name = '_'.join((self.base_app, model))
@@ -67,18 +69,23 @@ class Command(BaseCommand):
                     schema_editor.alter_db_table(model, default_old_name, new_name)
 
         # [3] Edit django_migrations table, MigrationRecorder.Migration
-        print("Step 3")
+        self.stdout.write(self.style.NOTICE("  Renaming migration tables.")) if self.verbosity else None
         for migration in MigrationRecorder.Migration.objects.all():
             if migration.app == self.base_app:
                 migration.app = self.target_app
                 migration.save()
+
+        self.stdout.write(self.style.NOTICE("  Done.")) if self.verbosity else None
 
     def _verify_input(self):
         # check if provided apps exist and been renamed
         try:
             apps.get_app_config(self.target_app)
         except LookupError:
-            self.stderr.write("App '%s' could not be found. Is it in INSTALLED_APPS?" % self.target_app)
+            self.stderr.write(
+                "Did you rename the '%s' app physically and resolved all imports and string occurrences?"
+                % self.base_app
+            )
             sys.exit(2)
         try:
             apps.get_app_config(self.base_app)

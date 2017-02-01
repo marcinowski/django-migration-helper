@@ -83,7 +83,14 @@ class Command(BaseCommand):
 
         self._check_db_state()
 
+        self.stdout.write(self.style.NOTICE("  Moving {} from {} to {}.".format(
+            self.model,
+            self.base_app,
+            self.target_app,
+        ))) if self.verbosity else None
+
         # [1] First migration for base_app, manually AlterModelTable + SeparateDatabaseAndState
+        self.stdout.write(self.style.NOTICE("  Alter {} Model Table.".format(self.model))) if self.verbosity else None
         autodetector = self._get_autodetector(specified_apps=(self.base_app, ))
         autodetector.add_operation(
             # this has to be done manually, autodetector.generate_altered_db_table doesn't work
@@ -101,6 +108,8 @@ class Command(BaseCommand):
         self._write_migration_files(changes)
 
         # [2] Migrations for target_app, create model
+        self.stdout.write(self.style.NOTICE("  Create model {} in {}.".format(self.model, self.target_app))
+                          ) if self.verbosity else None
         autodetector = self._get_autodetector(specified_apps=(self.target_app, ))
         autodetector.new_model_keys = [(self.target_app, self.model)]  # overwrite it just for target_app
 
@@ -118,6 +127,8 @@ class Command(BaseCommand):
         self._write_migration_files(changes)
 
         # [3] Resolving all Relational Fields in other apps
+        self.stdout.write(self.style.NOTICE("  Resolving relational fields.".format(self.model))
+                          ) if self.verbosity else None
         autodetector = self._get_autodetector(specified_apps=self.app_labels)
 
         autodetector._prepare_field_lists()
@@ -138,6 +149,8 @@ class Command(BaseCommand):
         self._write_migration_files(changes)
 
         # [4] Delete model from state in base_app
+        self.stdout.write(self.style.NOTICE("  Delete {} in {}.".format(self.model, self.base_app))
+                          ) if self.verbosity else None
         autodetector = self._get_autodetector(specified_apps=(self.base_app,))
         autodetector.generate_deleted_models()
         autodetector._build_migration_list()
@@ -152,6 +165,8 @@ class Command(BaseCommand):
 
         # [5] If user passed --migrate flag, apply migrations.
         if self.migrate:
+            self.stdout.write(self.style.NOTICE("  Applying migrations.".format(self.model))
+                              ) if self.verbosity else None
             MigrateCommand().handle(
                 app_label='',
                 migration_name='',
@@ -162,6 +177,7 @@ class Command(BaseCommand):
                 fake_initial=False,
                 run_syncdb=False
             )
+        self.stdout.write(self.style.NOTICE("  Done.")) if self.verbosity else None
 
     def _check_db_state(self):
         # check if all previous migrations are applied
