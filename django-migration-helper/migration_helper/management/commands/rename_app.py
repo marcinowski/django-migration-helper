@@ -39,12 +39,16 @@ class Command(BaseCommand):
         self.target_app = options['target_app']
         self.database = options['database']
 
+        self.verbosity = options['verbosity']
+        self.interactive = options['interactive']
+
         connection = connections[self.database]
 
         # [0] Perform some checks about apps_labels, apps state, db state and migrations
-        self._verify_input()
+        # self._verify_input()
 
         # [1] Edit django_content_type table, alter <base_app> to <target_app> (also in model) ContentType
+        print("Step 1")
         for ctype in ContentType.objects.all():
             if ctype.app_label == self.base_app:
                 ctype.app_label = self.target_app
@@ -54,8 +58,16 @@ class Command(BaseCommand):
                 ctype.save()
 
         # [2] Rename model tables under <base_app> BaseDatabaseSchemaEditor ??
+        print("Step 2")
+        with connection.schema_editor(atomic=True) as schema_editor:
+            for model, state in apps.get_app_config(self.target_app).models.items():
+                default_old_name = '_'.join((self.base_app, model))
+                if default_old_name == state._meta.db_table:
+                    new_name = '_'.join((self.target_app, model))
+                    schema_editor.alter_db_table(model, default_old_name, new_name)
 
         # [3] Edit django_migrations table, MigrationRecorder.Migration
+        print("Step 3")
         for migration in MigrationRecorder.Migration.objects.all():
             if migration.app == self.base_app:
                 migration.app = self.target_app
@@ -78,3 +90,14 @@ class Command(BaseCommand):
                 % self.base_app
             )
             sys.exit(2)
+
+    def _show_info(self):
+        info = [
+            'hehe',
+            'jeje',
+            'ojoj'
+        ]
+        if self.verbosity >= 1:
+            yield self.stdout.write(
+                self.style.NOTICE(info)
+            )
