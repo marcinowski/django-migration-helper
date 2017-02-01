@@ -47,7 +47,7 @@ class Command(BaseCommand):
         self.stdout.write(self.style.NOTICE("  Renaming {} to {}.".format(self.base_app, self.target_app))
                           ) if self.verbosity else None
         # [0] Perform some checks about apps_labels, apps state, db state and migrations
-        # self._verify_input()
+        self._verify_input()
 
         # [1] Edit django_content_type table, alter <base_app> to <target_app> (also in model) ContentType
         self.stdout.write(self.style.NOTICE("  Renaming content types.")) if self.verbosity else None
