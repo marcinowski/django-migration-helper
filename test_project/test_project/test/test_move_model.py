@@ -10,4 +10,4 @@ class TestMoveModelApp(TestCase):
     Here we test moving model between <base_app> and <target_app>
     """
     def setUp(self):
-
+        pass

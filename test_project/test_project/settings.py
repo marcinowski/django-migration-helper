@@ -40,9 +40,7 @@ INSTALLED_APPS = [
 
     'migration_helper',
     'base_app',
-    'target_app',
     'foreign_app',
-    'rename_app',
 ]
 
 MIDDLEWARE = [
